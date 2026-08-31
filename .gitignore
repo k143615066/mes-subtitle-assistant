@@ -1,0 +1,33 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+00_Server/app/config.local.py
+
+# Runtime uploads, generated outputs, and logs
+00_Raw_Material/
+00_Server/app/uploads/
+00_Server/data/output/
+00_Server/logs/
+Release/
+05_Docs/
+image.png
+
+# Legacy local resources excluded from source control
+00_Server/app/audio/
+00_Server/data/feedback/
+00_Server/models/
+
+# IDE / OS files
+.idea/
+.vscode/
+.trae/
+Thumbs.db
+Desktop.ini

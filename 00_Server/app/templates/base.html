@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}MES字幕助手{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="header-left"><h1>MES字幕助手</h1></div>
+            <div style="display:flex; align-items:center; gap:12px;">
+                <a href="/glossary" style="font-size:13px; color:var(--primary); text-decoration:none;">MES术语库</a>
+                <div class="status-badge"><span class="status-dot"></span>运行中</div>
+            </div>
+        </div>
+
+        {% block content %}{% endblock %}
+
+        <div class="footer">MES字幕助手</div>
+    </div>
+
+    {% block scripts %}{% endblock %}
+</body>
+</html>

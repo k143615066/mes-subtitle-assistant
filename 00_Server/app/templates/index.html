@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+
+{% block title %}MES字幕助手{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-title">上传中文字幕文件</div>
+    <div class="upload-zone-large" id="srtUploadZone">
+        <div class="upload-icon">&#128196;</div>
+        <div class="upload-hint">点击或拖拽 SRT 文件到此处</div>
+        <div class="upload-formats">支持格式：.srt</div>
+        <div class="file-name-display hidden" id="srtFileName"></div>
+        <input type="file" id="srtFile" accept=".srt">
+    </div>
+
+    <div id="srtAlert" class="alert hidden"></div>
+
+    <div class="button-group">
+        <button class="btn btn-primary" id="srtStartBtn" disabled>开始处理</button>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    var zone = document.getElementById('srtUploadZone');
+    var input = document.getElementById('srtFile');
+    var fileNameEl = document.getElementById('srtFileName');
+    var startBtn = document.getElementById('srtStartBtn');
+    var alertEl = document.getElementById('srtAlert');
+
+    zone.addEventListener('click', function() { input.click(); });
+    zone.addEventListener('dragover', function(event) {
+        event.preventDefault();
+        zone.classList.add('dragover');
+    });
+    zone.addEventListener('dragleave', function() {
+        zone.classList.remove('dragover');
+    });
+    zone.addEventListener('drop', function(event) {
+        event.preventDefault();
+        zone.classList.remove('dragover');
+        if (event.dataTransfer.files.length) {
+            input.files = event.dataTransfer.files;
+            handleFile(input.files[0]);
+        }
+    });
+    input.addEventListener('change', function() {
+        if (input.files.length) handleFile(input.files[0]);
+    });
+
+    function handleFile(file) {
+        if (!file.name.toLowerCase().endsWith('.srt')) {
+            showAlert('error', '仅支持 .srt 格式文件');
+            input.value = '';
+            return;
+        }
+        fileNameEl.textContent = '已选择：' + file.name;
+        fileNameEl.classList.remove('hidden');
+        startBtn.disabled = false;
+    }
+
+    function showAlert(type, message) {
+        alertEl.className = 'alert alert-' + type;
+        alertEl.textContent = message;
+        alertEl.classList.remove('hidden');
+    }
+
+    startBtn.addEventListener('click', function() {
+        if (!input.files.length) return;
+
+        startBtn.disabled = true;
+        startBtn.textContent = '上传中...';
+
+        var formData = new FormData();
+        formData.append('file', input.files[0]);
+        formData.append('mode', 'full');
+        formData.append('english_reflow', '1');
+
+        fetch('/api/upload', { method: 'POST', body: formData })
+            .then(function(response) { return response.json(); })
+            .then(function(data) {
+                if (data.success) {
+                    window.location.href = data.redirect;
+                    return;
+                }
+                showAlert('error', data.message || '上传失败');
+                startBtn.disabled = false;
+                startBtn.textContent = '开始处理';
+            })
+            .catch(function(error) {
+                showAlert('error', '上传失败：' + error.message);
+                startBtn.disabled = false;
+                startBtn.textContent = '开始处理';
+            });
+    });
+});
+</script>
+{% endblock %}

@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+
+{% block title %}MES字幕助手 - 下载{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-title" style="color:var(--success);">处理完成</div>
+    <div class="file-list">
+        {% for file in subtitle_files %}
+        <div class="file-item">
+            <div class="file-icon">&#128196;</div>
+            <div class="file-info">
+                <div class="file-name">{{ file.name }}</div>
+                <div class="file-desc">{{ file.label }}</div>
+            </div>
+            <div class="file-actions">
+                <a href="/api/download/{{ session_id }}/{{ file.name }}" class="btn btn-primary" style="width:auto; padding:8px 20px; font-size:13px;">下载</a>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<div class="card">
+    <div class="steps-guide">
+        <h3>使用字幕</h3>
+        <ol>
+            <li>下载中文字幕和需要使用的英文字幕。</li>
+            <li>将字幕导入视频编辑软件。</li>
+            <li>在视频编辑软件中设置字幕样式和位置。</li>
+        </ol>
+    </div>
+</div>
+
+<div style="display:flex; justify-content:center;">
+    <a href="/" class="btn btn-secondary">返回首页</a>
+</div>
+{% endblock %}

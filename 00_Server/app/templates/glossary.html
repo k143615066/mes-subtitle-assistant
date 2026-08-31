@@ -1,0 +1,224 @@
+{% extends "base.html" %}
+
+{% block title %}MES字幕助手 - MES术语库{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:16px;">
+        <div>
+            <div class="card-title">MES术语库</div>
+            <div style="font-size:13px; color:var(--text-light); margin-top:5px;">术语修改会应用于之后的新字幕任务。</div>
+        </div>
+        <button class="btn btn-primary" id="addBtn" style="width:auto; padding:8px 16px;">新增术语</button>
+    </div>
+
+    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:14px;">
+        <input id="searchInput" type="search" placeholder="搜索中文、英文或模块" style="flex:1; min-width:220px;">
+        <select id="categoryFilter" style="min-width:180px;"></select>
+    </div>
+
+    <div id="glossaryAlert" class="alert hidden"></div>
+    <div id="glossarySummary" style="font-size:13px; color:var(--text-light); margin-bottom:10px;"></div>
+    <div style="overflow-x:auto;">
+        <table class="edit-table">
+            <thead>
+                <tr>
+                    <th>中文术语</th>
+                    <th>推荐英文</th>
+                    <th>别名</th>
+                    <th>模块</th>
+                    <th class="col-action">操作</th>
+                </tr>
+            </thead>
+            <tbody id="glossaryBody"></tbody>
+        </table>
+    </div>
+</div>
+
+<div class="split-overlay hidden" id="termOverlay">
+    <div class="split-modal" style="max-width:680px;">
+        <div class="split-header">
+            <h3 id="termDialogTitle">新增术语</h3>
+            <button class="split-close" id="closeDialogBtn">&times;</button>
+        </div>
+        <div class="split-body">
+            <div class="form-group">
+                <label for="termCategory">分类</label>
+                <select id="termCategory"></select>
+            </div>
+            <div class="form-group">
+                <label for="termChinese">中文术语</label>
+                <input id="termChinese" type="text" maxlength="120" required>
+            </div>
+            <div class="form-group">
+                <label for="termEnglish">推荐英文</label>
+                <input id="termEnglish" type="text" maxlength="180" required>
+            </div>
+            <div class="form-group">
+                <label for="termAlias">缩写或别名</label>
+                <input id="termAlias" type="text" maxlength="180">
+            </div>
+            <div class="form-group">
+                <label for="termModule">所属模块</label>
+                <input id="termModule" type="text" maxlength="120">
+            </div>
+            <div class="form-group">
+                <label for="termNotes">备注</label>
+                <textarea id="termNotes" rows="3" maxlength="300"></textarea>
+            </div>
+        </div>
+        <div class="split-footer">
+            <button class="btn btn-secondary" id="cancelDialogBtn">取消</button>
+            <button class="btn btn-primary" id="saveTermBtn" style="width:auto;">保存术语</button>
+        </div>
+    </div>
+</div>
+
+<div style="display:flex; justify-content:center;">
+    <a href="/" class="btn btn-secondary">返回首页</a>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    var terms = [];
+    var categories = [];
+    var editingId = '';
+    var body = document.getElementById('glossaryBody');
+    var filter = document.getElementById('categoryFilter');
+    var search = document.getElementById('searchInput');
+    var overlay = document.getElementById('termOverlay');
+    var alertBox = document.getElementById('glossaryAlert');
+
+    function escapeHtml(value) {
+        var node = document.createElement('div');
+        node.textContent = value || '';
+        return node.innerHTML;
+    }
+
+    function showAlert(type, message) {
+        alertBox.className = 'alert alert-' + type;
+        alertBox.textContent = message;
+        alertBox.classList.remove('hidden');
+    }
+
+    function loadTerms() {
+        fetch('/api/glossary')
+            .then(function(response) { return response.json(); })
+            .then(function(data) {
+                if (!data.success) throw new Error(data.message || '读取术语库失败');
+                terms = data.terms || [];
+                categories = data.categories || [];
+                filter.innerHTML = '<option value="">全部分类</option>' + categories.map(function(category) {
+                    return '<option value="' + escapeHtml(category) + '">' + escapeHtml(category) + '</option>';
+                }).join('');
+                document.getElementById('termCategory').innerHTML = categories.map(function(category) {
+                    return '<option value="' + escapeHtml(category) + '">' + escapeHtml(category) + '</option>';
+                }).join('');
+                renderTerms();
+            })
+            .catch(function(error) { showAlert('error', error.message); });
+    }
+
+    function renderTerms() {
+        var keyword = search.value.trim().toLowerCase();
+        var selectedCategory = filter.value;
+        var visible = terms.filter(function(term) {
+            var haystack = [term.term, term.translation, term.alias, term.module, term.category, term.notes].join(' ').toLowerCase();
+            return (!selectedCategory || term.category === selectedCategory) && (!keyword || haystack.indexOf(keyword) !== -1);
+        });
+        document.getElementById('glossarySummary').textContent = '共 ' + terms.length + ' 条术语，当前显示 ' + visible.length + ' 条。';
+        body.innerHTML = visible.map(function(term) {
+            return '<tr>' +
+                '<td>' + escapeHtml(term.term) + '</td>' +
+                '<td>' + escapeHtml(term.translation) + '</td>' +
+                '<td>' + escapeHtml(term.alias) + '</td>' +
+                '<td>' + escapeHtml(term.module) + '</td>' +
+                '<td class="col-action"><button class="btn btn-secondary term-edit" data-id="' + escapeHtml(term.id) + '" style="padding:5px 10px; font-size:12px;">编辑</button> <button class="btn btn-secondary term-delete" data-id="' + escapeHtml(term.id) + '" style="padding:5px 10px; font-size:12px;">删除</button></td>' +
+                '</tr>';
+        }).join('') || '<tr><td colspan="5" style="text-align:center; color:var(--text-light); padding:24px;">没有匹配的术语</td></tr>';
+    }
+
+    function openDialog(term) {
+        editingId = term ? term.id : '';
+        document.getElementById('termDialogTitle').textContent = term ? '编辑术语' : '新增术语';
+        document.getElementById('termCategory').value = term ? term.category : categories[0];
+        document.getElementById('termChinese').value = term ? term.term : '';
+        document.getElementById('termEnglish').value = term ? term.translation : '';
+        document.getElementById('termAlias').value = term ? term.alias : '';
+        document.getElementById('termModule').value = term ? term.module : '';
+        document.getElementById('termNotes').value = term ? term.notes : '';
+        overlay.classList.remove('hidden');
+        document.getElementById('termChinese').focus();
+    }
+
+    function closeDialog() {
+        overlay.classList.add('hidden');
+        editingId = '';
+    }
+
+    document.getElementById('addBtn').addEventListener('click', function() { openDialog(null); });
+    document.getElementById('closeDialogBtn').addEventListener('click', closeDialog);
+    document.getElementById('cancelDialogBtn').addEventListener('click', closeDialog);
+    overlay.addEventListener('click', function(event) { if (event.target === overlay) closeDialog(); });
+    search.addEventListener('input', renderTerms);
+    filter.addEventListener('change', renderTerms);
+
+    body.addEventListener('click', function(event) {
+        var id = event.target.dataset.id;
+        if (!id) return;
+        var term = terms.find(function(item) { return item.id === id; });
+        if (event.target.classList.contains('term-edit')) openDialog(term);
+        if (event.target.classList.contains('term-delete') && term && confirm('确定删除“' + term.term + '”吗？')) {
+            fetch('/api/glossary/delete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id: id })
+            })
+                .then(function(response) { return response.json(); })
+                .then(function(data) {
+                    if (!data.success) throw new Error(data.message || '删除失败');
+                    showAlert('success', '术语已删除。');
+                    loadTerms();
+                })
+                .catch(function(error) { showAlert('error', error.message); });
+        }
+    });
+
+    document.getElementById('saveTermBtn').addEventListener('click', function(event) {
+        var payload = {
+            id: editingId,
+            category: document.getElementById('termCategory').value,
+            term: document.getElementById('termChinese').value,
+            translation: document.getElementById('termEnglish').value,
+            alias: document.getElementById('termAlias').value,
+            module: document.getElementById('termModule').value,
+            notes: document.getElementById('termNotes').value
+        };
+        var button = event.target;
+        button.disabled = true;
+        button.textContent = '保存中...';
+        fetch('/api/glossary', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        })
+            .then(function(response) { return response.json(); })
+            .then(function(data) {
+                if (!data.success) throw new Error(data.message || '保存失败');
+                closeDialog();
+                showAlert('success', '术语已保存。新的字幕任务会使用最新术语。');
+                loadTerms();
+            })
+            .catch(function(error) { showAlert('error', error.message); })
+            .finally(function() {
+                button.disabled = false;
+                button.textContent = '保存术语';
+            });
+    });
+
+    loadTerms();
+});
+</script>
+{% endblock %}

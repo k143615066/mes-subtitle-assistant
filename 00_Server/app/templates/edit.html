@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+
+{% block title %}MES字幕助手 - 校对中文{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-title">校对中文字幕</div>
+    <div style="font-size:13px; color:var(--text-light); margin-bottom:16px;">请确认文字内容正确后开始翻译。</div>
+
+    <div style="overflow-x:auto;">
+        <table class="edit-table">
+            <thead>
+                <tr>
+                    <th class="col-index">序号</th>
+                    <th class="col-time">时间轴</th>
+                    <th>内容</th>
+                </tr>
+            </thead>
+            <tbody id="editBody">
+                {% for entry in entries %}
+                <tr data-index="{{ entry.index }}" data-start="{{ entry.start_time }}" data-end="{{ entry.end_time }}">
+                    <td class="col-index">{{ entry.index }}</td>
+                    <td class="col-time">{{ entry.start_time }}<br>&rarr; {{ entry.end_time }}</td>
+                    <td class="col-text"><textarea rows="1">{{ entry.text }}</textarea></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div style="display:flex; justify-content:flex-end;">
+    <button class="btn btn-primary" id="saveBtn" style="width:auto; padding:10px 32px;">确认并开始翻译</button>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    var sessionId = "{{ session_id }}";
+    var saveBtn = document.getElementById('saveBtn');
+
+    document.querySelectorAll('.col-text textarea').forEach(function(textarea) {
+        textarea.style.height = 'auto';
+        textarea.style.height = textarea.scrollHeight + 'px';
+        textarea.addEventListener('input', function() {
+            this.style.height = 'auto';
+            this.style.height = this.scrollHeight + 'px';
+        });
+    });
+
+    saveBtn.addEventListener('click', function() {
+        saveBtn.disabled = true;
+        saveBtn.textContent = '保存中...';
+
+        var entries = [];
+        document.querySelectorAll('#editBody tr').forEach(function(row) {
+            entries.push({
+                index: parseInt(row.dataset.index),
+                start_time: row.dataset.start,
+                end_time: row.dataset.end,
+                text: row.querySelector('textarea').value
+            });
+        });
+
+        fetch('/api/save-edit', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session_id: sessionId, entries: entries })
+        })
+            .then(function(response) { return response.json(); })
+            .then(function(data) {
+                if (!data.success) throw new Error(data.message || '保存失败');
+                return fetch('/api/process', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ session_id: sessionId })
+                });
+            })
+            .then(function(response) { return response.json(); })
+            .then(function(data) {
+                if (!data.success) throw new Error(data.message || '翻译启动失败');
+                window.location.href = data.redirect;
+            })
+            .catch(function(error) {
+                alert(error.message);
+                saveBtn.disabled = false;
+                saveBtn.textContent = '确认并开始翻译';
+            });
+    });
+});
+</script>
+{% endblock %}

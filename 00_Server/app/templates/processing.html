@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+
+{% block title %}MES字幕助手 - 处理中{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-title">正在处理字幕</div>
+    <div style="font-size:13px; color:var(--text-light); margin-bottom:20px;">文件：{{ filename }}</div>
+
+    <div class="progress-steps">
+        <div class="progress-item">
+            <div class="step-icon waiting" id="iconOptimize">1</div>
+            <div class="step-info">
+                <div class="step-name">优化中文字幕</div>
+                <div class="step-bar"><div class="step-bar-fill" id="barOptimize" style="width:0%"></div></div>
+            </div>
+            <div class="step-status" id="statusOptimize">等待</div>
+        </div>
+        <div class="progress-item">
+            <div class="step-icon waiting" id="iconTranslate">2</div>
+            <div class="step-info">
+                <div class="step-name">翻译英文字幕</div>
+                <div class="step-bar"><div class="step-bar-fill" id="barTranslate" style="width:0%"></div></div>
+            </div>
+            <div class="step-status" id="statusTranslate">等待</div>
+        </div>
+        <div class="progress-item">
+            <div class="step-icon waiting" id="iconReflow">3</div>
+            <div class="step-info">
+                <div class="step-name">优化英文字幕可读性</div>
+                <div class="step-bar"><div class="step-bar-fill" id="barReflow" style="width:0%"></div></div>
+            </div>
+            <div class="step-status" id="statusReflow">等待</div>
+        </div>
+    </div>
+
+    <div id="progressMessage" style="text-align:center; color:var(--text-secondary); margin:18px 0 0;">正在准备...</div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    var sessionId = "{{ session_id }}";
+    function updateStep(name, state, percent) {
+        var icon = document.getElementById('icon' + name);
+        var bar = document.getElementById('bar' + name);
+        var status = document.getElementById('status' + name);
+        icon.className = 'step-icon ' + state;
+        bar.style.width = percent + '%';
+        status.textContent = state === 'done' ? '完成' : (state === 'active' ? percent + '%' : '等待');
+    }
+
+    function render(step, percent) {
+        if (step === 'polish') {
+            updateStep('Optimize', 'active', percent);
+            updateStep('Translate', 'waiting', 0);
+            updateStep('Reflow', 'waiting', 0);
+        } else if (step === 'translate') {
+            updateStep('Optimize', 'done', 100);
+            updateStep('Translate', 'active', Math.min(percent, 75));
+            updateStep('Reflow', 'waiting', 0);
+        } else if (step === 'done') {
+            updateStep('Optimize', 'done', 100);
+            updateStep('Translate', 'done', 100);
+            updateStep('Reflow', 'done', 100);
+        } else if (step === 'error') {
+            updateStep('Optimize', 'waiting', 0);
+            updateStep('Translate', 'waiting', 0);
+            updateStep('Reflow', 'waiting', 0);
+        } else {
+            updateStep('Optimize', 'done', 100);
+            updateStep('Translate', 'done', 100);
+            updateStep('Reflow', 'active', Math.max(0, Math.min(100, (percent - 75) * 4)));
+        }
+    }
+
+    function poll() {
+        fetch('/api/progress/' + sessionId)
+            .then(function(response) { return response.json(); })
+            .then(function(data) {
+                if (!data.success) return;
+                render(data.step, data.progress);
+                document.getElementById('progressMessage').textContent = data.message;
+
+                if (data.status === 'optimized') {
+                    window.location.href = '/edit/' + sessionId;
+                } else if (data.status === 'completed') {
+                    window.location.href = '/download/' + sessionId;
+                } else if (data.status === 'error') {
+                    document.getElementById('progressMessage').textContent = '处理失败：' + data.message;
+                } else {
+                    setTimeout(poll, 1500);
+                }
+            })
+            .catch(function() { setTimeout(poll, 3000); });
+    }
+
+    setTimeout(poll, 800);
+});
+</script>
+{% endblock %}
