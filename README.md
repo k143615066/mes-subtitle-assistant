@@ -45,7 +45,7 @@ Do not commit local runtime data or secrets. The included `.gitignore` excludes 
 
 ## GitHub Publishing
 
-Create an empty **private** repository in GitHub. Do not initialize it with a README, `.gitignore`, or license, because this project already includes those files. Then connect this local project and push its `main` branch:
+Create an empty GitHub repository. Do not initialize it with a README, `.gitignore`, or license, because this project already includes those files. Then connect this local project and push its `main` branch:
 
 ```bash
 git remote add origin https://github.com/<account-or-organization>/<repository>.git
@@ -54,9 +54,9 @@ git push -u origin main
 
 Repository settings:
 
-- Keep the repository **Private** because it contains internal product terminology and application source code.
+- This distribution repository is **Public**, so colleagues can download or clone it without a GitHub account. Anyone can view its source code and bundled MES terminology, so do not add confidential customer information or internal materials that are not approved for public sharing.
 - Do not add `.env` or API keys to GitHub. Each user creates their own local `.env` from `.env.example`.
-- Give colleagues repository access as collaborators or through the organization team. They only need permission to clone and pull unless they are responsible for maintaining the glossary.
+- Colleagues only need a GitHub account if they will directly push glossary or code changes. For normal use, they can open the public repository in Codex and ask it to clone and start the project.
 - Use the `main` branch as the shared release branch. Review and commit glossary edits before asking colleagues to pull updates.
 
 ## Windows
