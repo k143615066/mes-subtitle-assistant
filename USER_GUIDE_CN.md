@@ -27,28 +27,25 @@
 
 ### Windows
 
-双击 `00_Server/start_server.bat`，然后在浏览器打开 `http://localhost:15000`。
+双击项目根目录的 `启动MES字幕助手.bat`。首次启动会提示输入 DeepSeek API Key，并自动创建本机运行环境、安装依赖和打开浏览器。后续直接双击同一个文件即可。
 
 ### macOS
 
-首次使用请在终端进入项目根目录，执行：
+双击项目根目录的 `启动MES字幕助手.command`。首次启动会提示输入 DeepSeek API Key，并自动创建本机运行环境、安装依赖和打开浏览器。
 
-```bash
-chmod +x 00_Server/start_server.sh
-./00_Server/start_server.sh
-```
-
-然后在浏览器打开 `http://localhost:15000`。
+如果 macOS 首次阻止打开该文件，请在 Finder 中按住 Control 点击文件，选择“打开”，再确认一次。之后可正常双击启动。
 
 ## 首次配置
 
-项目根目录中需要有 `.env` 文件。将 `.env.example` 复制为 `.env`，并填写：
+启动器会在第一次运行时询问 DeepSeek API Key，并在项目根目录自动创建 `.env`：
 
 ```text
 DeepSeek_Key=你的DeepSeek密钥
 ```
 
 请不要把 `.env` 文件发送给其他人，也不要上传到 GitHub。字幕文件保留在本机，但字幕文本会发送到 DeepSeek 完成 AI 处理。
+
+如果启动器提示没有 Python 3.10 或更高版本，直接将提示内容发送给 Codex，请它协助安装后再重新双击启动器。
 
 ## 内置术语库
 
