@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""English subtitle reflow and readability analysis.
+"""Multilingual subtitle reflow and readability analysis.
 
-The translation API keeps one English entry per source entry. This module
-groups those fragments into readable English subtitle units and records the
+The translation API keeps one target-language entry per source entry. This
+module groups those fragments into readable subtitle units and records the
 reading-speed metrics used to review the result.
 """
 
@@ -15,21 +15,40 @@ from .srt_parser import SRTEntry, build_srt, format_time, parse_time
 from .translator import parse_translated_srt
 
 
-SENTENCE_END_RE = re.compile(r"[.!?。！？；;]\s*$")
-CLAUSE_END_RE = re.compile(r"[,，、:]\s*$")
+SENTENCE_END_RE = re.compile(r"[.!?؟。！？；;]\s*$")
+CLAUSE_END_RE = re.compile(r"[,，、:،]\s*$")
 CONTINUATION_START_RE = re.compile(
     r"^(and|or|but|so|because|if|when|while|which|that|to|of|for|in|on|with|as)\b",
     re.IGNORECASE,
 )
+CONTINUATION_PATTERNS = {
+    "en": CONTINUATION_START_RE,
+    "es-mx": re.compile(
+        r"^(y|o|pero|porque|si|cuando|mientras|que|para|de|por|en|con|como)\b",
+        re.IGNORECASE,
+    ),
+    "vi": re.compile(
+        r"^(và|hoặc|nhưng|vì|nếu|khi|trong khi|để|của|cho|với)\b",
+        re.IGNORECASE,
+    ),
+    "ar": re.compile(r"^(و|أو|لكن|لأن|إذا|عندما|بينما|الذي|التي|إلى|من|في|على|مع)"),
+    "zh-tw": re.compile(r"^(以及|和|或|但是|所以|因為|如果|當|而且|的|在|與)"),
+}
 
 
 def word_count(text: str) -> int:
     return len(re.findall(r"\b[\w']+\b", text or ""))
 
 
-def reading_speed(text: str, duration_ms: int) -> float:
+def reading_unit_count(text: str, language_code: str = "en") -> int:
+    if _is_cjk_language(language_code):
+        return len(re.findall(r"[\u3400-\u9fff]", text or ""))
+    return word_count(text)
+
+
+def reading_speed(text: str, duration_ms: int, language_code: str = "en") -> float:
     seconds = max(duration_ms / 1000.0, 0.001)
-    return word_count(text) / seconds
+    return reading_unit_count(text, language_code) / seconds
 
 
 def _clean_text(text: str) -> str:
@@ -39,7 +58,11 @@ def _clean_text(text: str) -> str:
     return text.strip()
 
 
-def _group_by_rules(entries: List[SRTEntry]) -> List[List[int]]:
+def _is_cjk_language(language: str) -> bool:
+    return language.lower() in {"zh-tw", "zh_tw", "zh"}
+
+
+def _group_by_rules(entries: List[SRTEntry], language_code: str = "en") -> List[List[int]]:
     """Fallback grouping used when the AI response is unavailable or invalid."""
     if not entries:
         return []
@@ -56,7 +79,10 @@ def _group_by_rules(entries: List[SRTEntry]) -> List[List[int]]:
         clause_ends = bool(CLAUSE_END_RE.search(chinese)) or bool(CLAUSE_END_RE.search(english))
 
         next_text = _clean_text(entries[position + 1].text) if position + 1 < len(entries) else ""
-        next_continues = bool(CONTINUATION_START_RE.search(next_text))
+        continuation_re = CONTINUATION_PATTERNS.get(
+            language_code.lower(), CONTINUATION_START_RE
+        )
+        next_continues = bool(continuation_re.search(next_text))
         should_close = (
             len(current) >= 4
             or duration_ms.total_seconds() >= 7
@@ -122,22 +148,31 @@ def _build_prompt(
     max_chars_per_line: int,
     warning_wps: float,
     hard_wps: float,
+    language: str = "English",
+    language_code: str = "en",
+    language_instruction: str = "",
     revision_note: str = "",
 ) -> Tuple[str, str]:
+    speed_unit = "characters/sec" if _is_cjk_language(language_code) else "words/sec"
     system = (
-        "你是制造业 MES 视频的英文字幕编辑。\n"
-        "任务是把机器翻译产生的英文碎片重排为易读字幕。\n"
+        f"你是制造业 MES 视频的{language}字幕编辑。\n"
+        f"目标语言代码是：{language_code}。\n"
+        f"任务是把机器翻译产生的{language}字幕碎片重排为易读字幕。\n"
         "规则：\n"
         "1. 相邻且属于同一句话的片段必须合并，不要保留孤立的从句、介词短语或逗号短语。\n"
         "2. 保留中文原意和 MES/SMT 专业术语，不添加原文没有的信息。\n"
-        f"3. 英文要自然、简洁，目标不超过 {warning_wps} words/sec，绝对不要超过 {hard_wps} words/sec。\n"
+        f"3. 目标语言要自然、简洁，目标不超过 {warning_wps} {speed_unit}，"
+        f"绝对不要超过 {hard_wps} {speed_unit}。\n"
         "4. 每个输出组只能由连续的 source_positions 组成，必须覆盖所有输入位置且不能遗漏、重复。\n"
         "5. 一般一个完整句子一个组；长句应按语义拆成多个相邻组。\n"
-        f"6. 每组最多两行，每行最多约 {max_chars_per_line} 个英文字符，即单组尽量不超过 {max_chars_per_line * 2} 个字符。\n"
+        f"6. 每组最多两行，每行最多约 {max_chars_per_line} 个目标语言字符，单组尽量不超过 {max_chars_per_line * 2} 个字符。\n"
         "7. 不要输出以逗号结尾的孤立短语，也不要输出不完整语法片段。\n"
-        "8. 只输出 JSON，不要 Markdown，不要解释。格式："
-        '{"groups":[{"source_positions":[1,2],"text":"Complete English sentence."}]}\n'
+        "8. 保持正确的目标语言标点和书写方向；阿拉伯语使用现代标准阿拉伯语。\n"
+        "9. 只输出 JSON，不要 Markdown，不要解释。格式："
+        '{"groups":[{"source_positions":[1,2],"text":"Complete target-language sentence."}]}\n'
     )
+    if language_instruction:
+        system += f"目标语言本地化要求：{language_instruction}\n"
     if glossary_text:
         system += "术语表（优先采用）：\n" + glossary_text + "\n"
 
@@ -147,7 +182,7 @@ def _build_prompt(
             "source_position": position,
             "duration_seconds": round(en.duration_ms / 1000.0, 3),
             "chinese": cn.text,
-            "english_fragment": en.text,
+            "target_fragment": en.text,
         })
     user = json.dumps(rows, ensure_ascii=False, indent=2)
     if revision_note:
@@ -160,6 +195,7 @@ def _group_violations(
     entries: List[SRTEntry],
     max_chars_per_line: int,
     hard_wps: float,
+    language_code: str = "en",
 ) -> List[str]:
     violations = []
     for number, group in enumerate(groups, start=1):
@@ -168,14 +204,14 @@ def _group_violations(
         last = entries[positions[-1] - 1]
         duration_ms = int((parse_time(last.end_time) - parse_time(first.start_time)).total_seconds() * 1000)
         text = _clean_text(group["text"])
-        wps = reading_speed(text, duration_ms)
+        wps = reading_speed(text, duration_ms, language_code)
         if len(text) > max_chars_per_line * 2:
             violations.append(
                 f"第 {number} 组有 {len(text)} 个字符，超过两行建议上限 {max_chars_per_line * 2}"
             )
         if wps > hard_wps:
             violations.append(
-                f"第 {number} 组阅读速度 {wps:.2f} words/sec，超过硬上限 {hard_wps}"
+                f"第 {number} 组阅读速度 {wps:.2f}，超过硬上限 {hard_wps}"
             )
         if re.search(r"[,，:]\s*$", text):
             violations.append(f"第 {number} 组以逗号或冒号结尾，是不完整片段")
@@ -215,6 +251,26 @@ def _wrap_text(text: str, max_chars: int) -> str:
     return " ".join(words[:best_split]) + "\n" + " ".join(words[best_split:])
 
 
+def _wrap_target_text(text: str, max_chars: int, language: str) -> str:
+    """Wrap CJK text by characters and other languages by whitespace."""
+    cleaned = _clean_text(text)
+    if not _is_cjk_language(language):
+        return _wrap_text(cleaned, max_chars)
+    if len(cleaned) <= max_chars:
+        return cleaned
+    best_split = max_chars
+    remaining = len(cleaned) - best_split
+    for split in range(1, len(cleaned)):
+        first_length = split
+        second_length = len(cleaned) - split
+        score = max(0, first_length - max_chars) * 100 + max(0, second_length - max_chars) * 100
+        score += abs(first_length - second_length)
+        if score < remaining:
+            remaining = score
+            best_split = split
+    return cleaned[:best_split] + "\n" + cleaned[best_split:]
+
+
 def reflow_english_subtitles(
     cn_entries: List[SRTEntry],
     en_entries: List[SRTEntry],
@@ -229,10 +285,13 @@ def reflow_english_subtitles(
     max_retries: int = 1,
     revise_batches: bool = False,
     progress_callback=None,
+    language: str = "English",
+    language_code: str = "en",
+    language_instruction: str = "",
 ) -> Tuple[List[SRTEntry], List[List[int]], Dict]:
-    """Return optimized English entries, source mappings, and metrics."""
+    """Return optimized target-language entries, source mappings, and metrics."""
     if len(cn_entries) != len(en_entries):
-        raise ValueError("Chinese and English entry counts must match before reflow")
+        raise ValueError("Chinese and target-language entry counts must match before reflow")
     if not en_entries:
         return [], [], {"total_entries": 0, "warning_entries": 0, "ai_batches": 0, "fallback_batches": 0}
 
@@ -258,6 +317,9 @@ def reflow_english_subtitles(
                 max_chars_per_line,
                 warning_wps,
                 hard_wps,
+                language,
+                language_code,
+                language_instruction,
             )
             try:
                 groups = _parse_ai_groups(
@@ -272,7 +334,13 @@ def reflow_english_subtitles(
                 )
                 if groups:
                     ai_batches += 1
-                    violations = _group_violations(groups, batch_en, max_chars_per_line, hard_wps)
+                    violations = _group_violations(
+                        groups,
+                        batch_en,
+                        max_chars_per_line,
+                        hard_wps,
+                        language_code,
+                    )
                     if violations and revise_batches:
                         revision_system, revision_user = _build_prompt(
                             batch_cn,
@@ -281,6 +349,9 @@ def reflow_english_subtitles(
                             max_chars_per_line,
                             warning_wps,
                             hard_wps,
+                            language,
+                            language_code,
+                            language_instruction,
                             revision_note="\n".join(f"- {item}" for item in violations),
                         )
                         revised = _parse_ai_groups(
@@ -295,7 +366,11 @@ def reflow_english_subtitles(
                         )
                         if revised:
                             revised_violations = _group_violations(
-                                revised, batch_en, max_chars_per_line, hard_wps
+                                revised,
+                                batch_en,
+                                max_chars_per_line,
+                                hard_wps,
+                                language_code,
                             )
                             if len(revised_violations) <= len(violations):
                                 groups = revised
@@ -309,7 +384,7 @@ def reflow_english_subtitles(
             groups = [
                 {"source_positions": [position + 1 for position in positions],
                  "text": _clean_text(" ".join(batch_en[position].text for position in positions))}
-                for positions in _group_by_rules(batch_en)
+                for positions in _group_by_rules(batch_en, language_code)
             ]
 
         if progress_callback:
@@ -319,14 +394,16 @@ def reflow_english_subtitles(
             absolute_positions = [start + position - 1 for position in group["source_positions"]]
             absolute_group = {"source_positions": [position + 1 for position in absolute_positions], "text": group["text"]}
             entry = _entry_from_group(absolute_group, cn_entries, en_entries, len(output) + 1)
-            entry.text = _wrap_text(entry.text, max_chars_per_line)
+            entry.text = _wrap_target_text(
+                entry.text, max_chars_per_line, language_code
+            )
             output.append(entry)
             mappings.append(absolute_positions)
 
     metrics = []
     warning_entries = 0
     for entry, source_positions in zip(output, mappings):
-        wps = reading_speed(entry.text, entry.duration_ms)
+        wps = reading_speed(entry.text, entry.duration_ms, language_code)
         flags = []
         if entry.duration_ms < min_duration_ms:
             flags.append("short_duration")
@@ -340,6 +417,13 @@ def reflow_english_subtitles(
             "index": entry.index,
             "source_positions": [position + 1 for position in source_positions],
             "duration_seconds": round(entry.duration_ms / 1000.0, 3),
+            "reading_unit_count": reading_unit_count(entry.text, language_code),
+            "reading_speed": round(wps, 2),
+            "reading_speed_unit": (
+                "characters_per_second"
+                if _is_cjk_language(language_code)
+                else "words_per_second"
+            ),
             "word_count": word_count(entry.text),
             "words_per_second": round(wps, 2),
             "flags": flags,

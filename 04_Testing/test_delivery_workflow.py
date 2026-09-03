@@ -82,6 +82,104 @@ class DeliveryWorkflowTest(unittest.TestCase):
         )
         self.assertTrue(all(os.path.exists(item["path"]) for item in session["output_files"]))
 
+    def test_arabic_delivery_keeps_three_files_and_rtl_configuration(self):
+        session_id = "arabictest"
+        entries = [
+            SRTEntry(1, "00:00:00,000", "00:00:02,000", "这是 MES 看板。"),
+        ]
+        main.sessions[session_id] = {
+            "id": session_id,
+            "filename": "demo.srt",
+            "target_language": "ar",
+            "target_language_label": "阿拉伯语（现代标准阿拉伯语）",
+            "entries": entries,
+            "status": "uploaded",
+            "progress": {"step": "", "percent": 0, "message": "", "logs": []},
+            "output_files": [],
+            "api_calls": [],
+        }
+
+        translated_entries = [
+            SRTEntry(1, "00:00:00,000", "00:00:02,000", "لوحة MES."),
+        ]
+        with patch.object(
+            main, "translate_srt_entries", return_value=translated_entries
+        ) as translate_mock, patch.object(
+            main,
+            "reflow_english_subtitles",
+            return_value=(translated_entries, [[0]], {"merged_entries": 0}),
+        ) as reflow_mock:
+            main._process_worker(session_id)
+
+        session = main.sessions[session_id]
+        self.assertEqual(session["status"], "completed")
+        self.assertEqual(len(session["output_files"]), 3)
+        self.assertEqual(
+            [item["name"] for item in session["output_files"]],
+            [
+                "中文_demo.srt",
+                "阿拉伯语_demo.srt",
+                "阿拉伯语_可读优化版_demo.srt",
+            ],
+        )
+        self.assertEqual(translate_mock.call_args.kwargs["target_language"], "Modern Standard Arabic (MSA)")
+        self.assertEqual(reflow_mock.call_args.kwargs["language_code"], "ar")
+
+    def test_mexican_spanish_uses_target_language_and_three_files(self):
+        session_id = "spanishtest"
+        entries = [
+            SRTEntry(1, "00:00:00,000", "00:00:02,000", "这个 MES 看板。"),
+            SRTEntry(2, "00:00:02,000", "00:00:04,000", "查看生产进度。"),
+        ]
+        main.sessions[session_id] = {
+            "id": session_id,
+            "filename": "demo.srt",
+            "target_language": "es-MX",
+            "target_language_label": "西班牙语（墨西哥）",
+            "entries": entries,
+            "status": "uploaded",
+            "progress": {"step": "", "percent": 0, "message": "", "logs": []},
+            "output_files": [],
+            "api_calls": [],
+        }
+
+        translated_entries = [
+            SRTEntry(1, "00:00:00,000", "00:00:02,000", "El tablero MES."),
+            SRTEntry(2, "00:00:02,000", "00:00:04,000", "Consultar el avance de producción."),
+        ]
+
+        with patch.object(
+            main,
+            "translate_srt_entries",
+            return_value=translated_entries,
+        ) as translate_mock, patch.object(
+            main,
+            "reflow_english_subtitles",
+            return_value=(translated_entries, [[0], [1]], {"merged_entries": 0}),
+        ) as reflow_mock:
+            main._process_worker(session_id)
+
+        session = main.sessions[session_id]
+        self.assertEqual(session["status"], "completed")
+        self.assertEqual(
+            [item["name"] for item in session["output_files"]],
+            [
+                "中文_demo.srt",
+                "西班牙语（墨西哥）_demo.srt",
+                "西班牙语（墨西哥）_可读优化版_demo.srt",
+            ],
+        )
+        self.assertEqual(len(session["output_files"]), 3)
+        self.assertEqual(
+            translate_mock.call_args.kwargs["target_language"],
+            "Mexican Spanish",
+        )
+        self.assertEqual(
+            reflow_mock.call_args.kwargs["language_code"],
+            "es-MX",
+        )
+        self.assertTrue(all(os.path.exists(item["path"]) for item in session["output_files"]))
+
 
 if __name__ == "__main__":
     unittest.main()

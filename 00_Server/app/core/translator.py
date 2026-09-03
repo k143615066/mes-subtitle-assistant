@@ -12,7 +12,12 @@ import re
 from .srt_parser import SRTEntry, build_srt
 
 
-def build_system_prompt(glossary_text: str, prompts: dict = None) -> str:
+def build_system_prompt(
+    glossary_text: str,
+    prompts: dict = None,
+    target_language: str = "English",
+    language_instruction: str = "",
+) -> str:
     """
     构建翻译用的system prompt。
 
@@ -34,14 +39,23 @@ def build_system_prompt(glossary_text: str, prompts: dict = None) -> str:
             "2. 保持口语化解说风格，自然流畅\n"
             "3. 翻译要简洁，适合字幕显示（每条字幕尽量简短）\n"
             "4. 保持前后文一致性\n"
+            "5. 只使用目标语言输出，不要混入不必要的其他语言\n"
+            "6. MES、SMT、ESOP、产品名和既有英文缩写应按行业习惯保留\n"
         )
+
+    prompt += f"目标语言是：{target_language}。\n"
+    if language_instruction:
+        prompt += f"目标语言本地化要求：{language_instruction}\n"
 
     if glossary_text:
         glossary_header = ""
         if prompts and "glossary_header" in prompts:
             glossary_header = prompts["glossary_header"]
         else:
-            glossary_header = "以下是MES系统专业术语对照表，请严格按照此表翻译："
+            glossary_header = (
+                "以下是MES系统专业术语对照表。中文术语对应的英文是标准术语；"
+                "当目标语言不是英文时，请先理解并参考标准英文，再翻译为目标语言："
+            )
 
         prompt += (
             "\n"
@@ -53,7 +67,10 @@ def build_system_prompt(glossary_text: str, prompts: dict = None) -> str:
     if prompts and "translation" in prompts and "user" in prompts["translation"]:
         user_instruction = prompts["translation"]["user"]
     else:
-        user_instruction = "请将以下中文字幕翻译为英文，保持SRT格式，只输出翻译结果，不要添加任何解释。"
+        user_instruction = (
+            f"请将以下中文字幕翻译为{target_language}，保持SRT格式，只输出翻译结果，"
+            "不要添加任何解释。"
+        )
 
     prompt += f"\n{user_instruction}"
 
@@ -179,9 +196,16 @@ def load_glossary(path: str) -> str:
     return ""
 
 
-def translate_srt_entries(entries: list, ai_client, glossary_text: str = "",
-                          batch_size: int = 25, prompts: dict = None,
-                          temperature: float = 0.3) -> list:
+def translate_srt_entries(
+    entries: list,
+    ai_client,
+    glossary_text: str = "",
+    batch_size: int = 25,
+    prompts: dict = None,
+    temperature: float = 0.3,
+    target_language: str = "English",
+    language_instruction: str = "",
+) -> list:
     """
     批量翻译SRTEntry列表。
 
@@ -196,7 +220,12 @@ def translate_srt_entries(entries: list, ai_client, glossary_text: str = "",
     返回:
         list[SRTEntry]: 翻译后的字幕条目列表
     """
-    system_prompt = build_system_prompt(glossary_text, prompts)
+    system_prompt = build_system_prompt(
+        glossary_text,
+        prompts,
+        target_language=target_language,
+        language_instruction=language_instruction,
+    )
 
     total = len(entries)
     translated_entries = []

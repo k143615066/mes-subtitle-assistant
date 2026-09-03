@@ -7,7 +7,12 @@ APP_DIR = os.path.join(ROOT, "00_Server", "app")
 if APP_DIR not in sys.path:
     sys.path.insert(0, APP_DIR)
 
-from core.english_reflow import _parse_ai_groups, compare_subtitle_files, reflow_english_subtitles
+from core.english_reflow import (
+    _build_prompt,
+    _parse_ai_groups,
+    compare_subtitle_files,
+    reflow_english_subtitles,
+)
 from core.srt_parser import SRTEntry
 
 
@@ -74,6 +79,26 @@ class EnglishReflowTest(unittest.TestCase):
         self.assertEqual(report["ai_revision_batches"], 1)
         self.assertEqual(mappings, [[0], [1]])
         self.assertEqual(len(optimized), 2)
+
+    def test_multilingual_reflow_prompt_preserves_target_language_context(self):
+        cn = [_entry(1, 0, 2, "MES 看板")]
+        es = [_entry(1, 0, 2, "El tablero MES")]
+        system, user = _build_prompt(
+            cn,
+            es,
+            "  MES -> MES\n  看板 -> Dashboard",
+            max_chars_per_line=42,
+            warning_wps=3.5,
+            hard_wps=4.0,
+            language="Mexican Spanish",
+            language_code="es-MX",
+            language_instruction="Use neutral professional Mexican Spanish.",
+        )
+        self.assertIn("Mexican Spanish", system)
+        self.assertIn("es-MX", system)
+        self.assertIn("Use neutral professional Mexican Spanish", system)
+        self.assertIn("MES -> MES", system)
+        self.assertIn("target_fragment", user)
 
 
 if __name__ == "__main__":

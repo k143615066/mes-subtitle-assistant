@@ -5,7 +5,7 @@
 {% block content %}
 <div class="card">
     <div class="card-title">正在处理字幕</div>
-    <div style="font-size:13px; color:var(--text-light); margin-bottom:20px;">文件：{{ filename }}</div>
+    <div style="font-size:13px; color:var(--text-light); margin-bottom:20px;">文件：{{ filename }}<br>目标语言：{{ target_language_label }}</div>
 
     <div class="progress-steps">
         <div class="progress-item">
@@ -19,7 +19,7 @@
         <div class="progress-item">
             <div class="step-icon waiting" id="iconTranslate">2</div>
             <div class="step-info">
-                <div class="step-name">翻译英文字幕</div>
+                <div class="step-name">翻译目标语言字幕</div>
                 <div class="step-bar"><div class="step-bar-fill" id="barTranslate" style="width:0%"></div></div>
             </div>
             <div class="step-status" id="statusTranslate">等待</div>
@@ -27,7 +27,7 @@
         <div class="progress-item">
             <div class="step-icon waiting" id="iconReflow">3</div>
             <div class="step-info">
-                <div class="step-name">优化英文字幕可读性</div>
+                <div class="step-name">优化目标语言字幕可读性</div>
                 <div class="step-bar"><div class="step-bar-fill" id="barReflow" style="width:0%"></div></div>
             </div>
             <div class="step-status" id="statusReflow">等待</div>
@@ -68,10 +68,14 @@ document.addEventListener('DOMContentLoaded', function() {
             updateStep('Optimize', 'waiting', 0);
             updateStep('Translate', 'waiting', 0);
             updateStep('Reflow', 'waiting', 0);
-        } else {
+        } else if (step === 'english_reflow') {
             updateStep('Optimize', 'done', 100);
             updateStep('Translate', 'done', 100);
             updateStep('Reflow', 'active', Math.max(0, Math.min(100, (percent - 75) * 4)));
+        } else {
+            updateStep('Optimize', 'done', 100);
+            updateStep('Translate', 'done', 100);
+            updateStep('Reflow', 'active', 0);
         }
     }
 

@@ -93,7 +93,11 @@ def _get_user_id():
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return render_template(
+        "index.html",
+        target_languages=cfg.TARGET_LANGUAGES,
+        default_target_language=cfg.DEFAULT_TARGET_LANGUAGE,
+    )
 
 
 @app.route("/glossary")
@@ -146,6 +150,13 @@ def api_upload():
     if not file.filename.endswith(".srt"):
         return jsonify({"success": False, "message": "仅支持 .srt 格式文件"}), 400
 
+    target_language = request.form.get(
+        "target_language", cfg.DEFAULT_TARGET_LANGUAGE
+    )
+    language_config = cfg.TARGET_LANGUAGES.get(target_language)
+    if language_config is None:
+        return jsonify({"success": False, "message": "不支持的目标语言"}), 400
+
     session_id = uuid.uuid4().hex[:12]
     upload_dir = os.path.join(cfg.UPLOAD_FOLDER, session_id)
     os.makedirs(upload_dir, exist_ok=True)
@@ -173,6 +184,8 @@ def api_upload():
     sessions[session_id] = {
         "id": session_id,
         "filename": file.filename,
+        "target_language": target_language,
+        "target_language_label": language_config["label"],
         "srt_path": srt_path,
         "entries": entries,
         "corrections": corrections,
@@ -225,6 +238,7 @@ def edit_page(session_id):
         filename=session["filename"],
         entries=entries_data,
         corrections=session["corrections"],
+        target_language_label=session.get("target_language_label", "英文"),
     )
 
 
@@ -349,7 +363,7 @@ def _process_worker(session_id):
     progress = session["progress"]
     progress["step"] = "translate"
     progress["percent"] = 0
-    progress["message"] = "正在翻译为英文..."
+    progress["message"] = "正在准备目标语言翻译..."
     progress["logs"] = []
     output_dir = os.path.join(cfg.OUTPUT_FOLDER, session_id)
     os.makedirs(output_dir, exist_ok=True)
@@ -357,9 +371,17 @@ def _process_worker(session_id):
     try:
         cn_entries = session["entries"]
         original_base = os.path.splitext(session["filename"])[0]
+        target_language = session.get(
+            "target_language", cfg.DEFAULT_TARGET_LANGUAGE
+        )
+        language_config = cfg.TARGET_LANGUAGES[target_language]
+        target_language_label = language_config["label"]
+        target_language_name = language_config["prompt_name"]
+        language_instruction = language_config["instruction"]
 
         progress["logs"].append(
-            f"{datetime.now().strftime('%H:%M:%S')} 开始英文翻译，共 {len(cn_entries)} 条中文字幕"
+            f"{datetime.now().strftime('%H:%M:%S')} 开始{target_language_label}翻译，"
+            f"共 {len(cn_entries)} 条中文字幕"
         )
         if cn_entries:
             progress["logs"].append(
@@ -376,12 +398,12 @@ def _process_worker(session_id):
             f.write(build_srt(cn_entries))
 
         progress["step"] = "translate"
-        progress["message"] = "正在翻译为英文..."
+        progress["message"] = f"正在翻译为{target_language_label}..."
 
         if cfg.DEEPSEEK_API_KEY:
             session["api_calls"].append({
                 "step": "translate",
-                "action": "AI英文翻译",
+                "action": f"AI{target_language_label}翻译",
                 "model": cfg.DEEPSEEK_MODEL,
                 "time": datetime.now().strftime('%H:%M:%S'),
             })
@@ -402,6 +424,8 @@ def _process_worker(session_id):
             glossary_text=glossary_text,
             batch_size=cfg.BATCH_SIZE,
             temperature=cfg.TRANSLATION_TEMPERATURE,
+            target_language=target_language_name,
+            language_instruction=language_instruction,
         )
 
         for i, en_entry in enumerate(en_entries):
@@ -411,9 +435,12 @@ def _process_worker(session_id):
                 en_entry.index = cn_entries[i].index
 
         progress["percent"] = 75
-        progress["message"] = "翻译完成，正在优化英文字幕可读性..."
+        progress["message"] = (
+            f"翻译完成，正在优化{target_language_label}字幕可读性..."
+        )
         progress["logs"].append(
-            f"{datetime.now().strftime('%H:%M:%S')} [API] 英文翻译完成 -> {len(en_entries)} 条"
+            f"{datetime.now().strftime('%H:%M:%S')} [API] {target_language_label}翻译完成"
+            f" -> {len(en_entries)} 条"
         )
 
         optimized_en_entries = en_entries
@@ -421,26 +448,32 @@ def _process_worker(session_id):
             progress["step"] = "english_reflow"
             session["api_calls"].append({
                 "step": "english_reflow",
-                "action": "AI英文字幕可读性优化",
+                "action": f"AI{target_language_label}字幕可读性优化",
                 "model": cfg.DEEPSEEK_MODEL,
                 "time": datetime.now().strftime('%H:%M:%S'),
             })
             progress["logs"].append(
-                f"{datetime.now().strftime('%H:%M:%S')} [API] 根据字幕约束重排英文碎片..."
+                f"{datetime.now().strftime('%H:%M:%S')} [API] 根据字幕约束重排"
+                f"{target_language_label}字幕碎片..."
             )
             try:
                 def update_reflow_progress(batch_number, total_batches, detail):
                     progress["percent"] = 75 + int((batch_number - 1) / total_batches * 15)
-                    progress["message"] = f"英文可读性优化：第 {batch_number}/{total_batches} 批，{detail}"
+                    progress["message"] = (
+                        f"{target_language_label}可读性优化：第 {batch_number}/"
+                        f"{total_batches} 批，{detail}"
+                    )
                     progress["logs"].append(
-                        f"{datetime.now().strftime('%H:%M:%S')} 英文可读性优化："
+                        f"{datetime.now().strftime('%H:%M:%S')} {target_language_label}"
+                        "可读性优化："
                         f"第 {batch_number}/{total_batches} 批，{detail}"
                     )
 
-                progress["message"] = "英文可读性优化排队中..."
+                progress["message"] = f"{target_language_label}可读性优化排队中..."
                 with ENGLISH_REFLOW_LOCK:
                     progress["logs"].append(
-                        f"{datetime.now().strftime('%H:%M:%S')} 获得英文可读性优化处理队列"
+                        f"{datetime.now().strftime('%H:%M:%S')} 获得"
+                        f"{target_language_label}可读性优化处理队列"
                     )
                     optimized_en_entries, mappings, reflow_report = reflow_english_subtitles(
                         cn_entries=cn_entries,
@@ -448,31 +481,44 @@ def _process_worker(session_id):
                         ai_client=ai_client,
                         glossary_text=glossary_text,
                         batch_size=cfg.ENGLISH_REFLOW_BATCH_SIZE,
-                        max_chars_per_line=cfg.ENGLISH_MAX_CHARS_PER_LINE,
-                        warning_wps=cfg.ENGLISH_WARNING_WPS,
-                        hard_wps=cfg.ENGLISH_HARD_WPS,
+                        max_chars_per_line=language_config["max_chars_per_line"],
+                        warning_wps=language_config["warning_reading_speed"],
+                        hard_wps=language_config["hard_reading_speed"],
                         min_duration_ms=cfg.ENGLISH_MIN_DURATION_MS,
                         timeout=cfg.ENGLISH_REFLOW_TIMEOUT,
                         max_retries=cfg.ENGLISH_REFLOW_MAX_RETRIES,
                         revise_batches=cfg.ENGLISH_REFLOW_REVISE_BATCHES,
                         progress_callback=update_reflow_progress,
+                        language=target_language_name,
+                        language_code=target_language,
+                        language_instruction=language_instruction,
                     )
                 progress["logs"].append(
-                    f"{datetime.now().strftime('%H:%M:%S')} 英文可读性优化完成 -> "
+                    f"{datetime.now().strftime('%H:%M:%S')} {target_language_label}"
+                    "可读性优化完成 -> "
                     f"{len(optimized_en_entries)} 条，合并 {reflow_report['merged_entries']} 条"
                 )
             except Exception as e:
-                logger.warning(f"[{session_id}] 英文字幕可读性优化失败，保留逐条翻译: {e}")
+                logger.warning(
+                    f"[{session_id}] {target_language_label}字幕可读性优化失败，"
+                    f"保留逐条翻译: {e}"
+                )
                 progress["logs"].append(
-                    f"{datetime.now().strftime('%H:%M:%S')} [警告] 英文重排失败，保留原翻译结果"
+                    f"{datetime.now().strftime('%H:%M:%S')} [警告] {target_language_label}"
+                    "重排失败，保留原翻译结果"
                 )
 
-        aligned_en_path = os.path.join(output_dir, f"英文_{original_base}.srt")
-        with open(aligned_en_path, "w", encoding="utf-8") as f:
+        target_prefix = language_config["file_prefix"]
+        aligned_target_path = os.path.join(
+            output_dir, f"{target_prefix}_{original_base}.srt"
+        )
+        with open(aligned_target_path, "w", encoding="utf-8") as f:
             f.write(build_srt(en_entries))
 
-        readable_en_path = os.path.join(output_dir, f"英文_可读优化版_{original_base}.srt")
-        with open(readable_en_path, "w", encoding="utf-8") as f:
+        readable_target_path = os.path.join(
+            output_dir, f"{target_prefix}_可读优化版_{original_base}.srt"
+        )
+        with open(readable_target_path, "w", encoding="utf-8") as f:
             f.write(build_srt(optimized_en_entries))
         with open(cn_path, "w", encoding="utf-8") as f:
             f.write(build_srt(cn_entries))
@@ -480,14 +526,14 @@ def _process_worker(session_id):
         session["output_files"] = [
             {"name": f"中文_{original_base}.srt", "label": "中文字幕", "path": cn_path},
             {
-                "name": f"英文_{original_base}.srt",
-                "label": "英文字幕（逐条对齐版）",
-                "path": aligned_en_path,
+                "name": f"{target_prefix}_{original_base}.srt",
+                "label": f"{target_language_label}字幕（逐条对齐版）",
+                "path": aligned_target_path,
             },
             {
-                "name": f"英文_可读优化版_{original_base}.srt",
-                "label": "英文字幕（可读优化版）",
-                "path": readable_en_path,
+                "name": f"{target_prefix}_可读优化版_{original_base}.srt",
+                "label": f"{target_language_label}字幕（可读优化版）",
+                "path": readable_target_path,
             },
         ]
         progress["step"] = "done"
@@ -498,7 +544,10 @@ def _process_worker(session_id):
         )
 
         session["status"] = "completed"
-        logger.info(f"[{session_id}] 处理完成: cn={len(cn_entries)}, en={len(en_entries)}")
+        logger.info(
+            f"[{session_id}] 处理完成: cn={len(cn_entries)}, "
+            f"target={target_language}, entries={len(en_entries)}"
+        )
 
     except Exception as e:
         error_handler.handle_worker_error(
@@ -517,6 +566,9 @@ def processing_page(session_id):
         "processing.html",
         session_id=session_id,
         filename=sessions[session_id]["filename"],
+        target_language_label=sessions[session_id].get(
+            "target_language_label", "英文"
+        ),
     )
 
 
@@ -557,6 +609,10 @@ def download_page(session_id):
         session_id=session_id,
         filename=session["filename"],
         subtitle_files=subtitle_files,
+        target_language_label=session.get("target_language_label", "英文"),
+        target_language_rtl=cfg.TARGET_LANGUAGES.get(
+            session.get("target_language", cfg.DEFAULT_TARGET_LANGUAGE), {}
+        ).get("rtl", False),
     )
 
 
@@ -595,7 +651,11 @@ def api_download(session_id, filename):
 
 @app.errorhandler(404)
 def page_not_found(e):
-    return render_template("index.html"), 404
+    return render_template(
+        "index.html",
+        target_languages=cfg.TARGET_LANGUAGES,
+        default_target_language=cfg.DEFAULT_TARGET_LANGUAGE,
+    ), 404
 
 
 @app.errorhandler(500)

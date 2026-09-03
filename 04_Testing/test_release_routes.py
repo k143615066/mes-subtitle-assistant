@@ -43,6 +43,30 @@ class ReleaseRoutesTest(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertFalse(response.get_json()["success"])
 
+    def test_home_lists_all_target_languages(self):
+        response = self.client.get("/")
+        self.assertEqual(response.status_code, 200)
+        page = response.get_data(as_text=True)
+        for label in ["英文", "台湾繁体中文", "越南语", "阿拉伯语", "西班牙语（墨西哥）"]:
+            self.assertIn(label, page)
+
+    def test_upload_rejects_unknown_target_language(self):
+        response = self.client.post(
+            "/api/upload",
+            data={
+                "file": (
+                    io.BytesIO(
+                        "1\n00:00:00,000 --> 00:00:01,000\n测试\n".encode("utf-8")
+                    ),
+                    "subtitle.srt",
+                ),
+                "target_language": "xx",
+            },
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(response.get_json()["success"])
+
 
 if __name__ == "__main__":
     unittest.main()

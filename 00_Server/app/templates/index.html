@@ -15,6 +15,16 @@
 
     <div id="srtAlert" class="alert hidden"></div>
 
+    <div style="margin-top:18px;">
+        <label for="targetLanguage" style="display:block; margin-bottom:8px; font-size:13px; color:var(--text-secondary);">目标语言</label>
+        <select id="targetLanguage" class="form-control" style="max-width:420px;">
+            {% for code, language in target_languages.items() %}
+            <option value="{{ code }}"{% if code == default_target_language %} selected{% endif %}>{{ language.label }}</option>
+            {% endfor %}
+        </select>
+        <div style="margin-top:7px; font-size:12px; color:var(--text-light);">MES术语库以中文-英文标准术语为依据，其他语言由 AI 参考英文术语生成。</div>
+    </div>
+
     <div class="button-group">
         <button class="btn btn-primary" id="srtStartBtn" disabled>开始处理</button>
     </div>
@@ -29,6 +39,7 @@ document.addEventListener('DOMContentLoaded', function() {
     var fileNameEl = document.getElementById('srtFileName');
     var startBtn = document.getElementById('srtStartBtn');
     var alertEl = document.getElementById('srtAlert');
+    var targetLanguage = document.getElementById('targetLanguage');
 
     zone.addEventListener('click', function() { input.click(); });
     zone.addEventListener('dragover', function(event) {
@@ -77,6 +88,7 @@ document.addEventListener('DOMContentLoaded', function() {
         formData.append('file', input.files[0]);
         formData.append('mode', 'full');
         formData.append('english_reflow', '1');
+        formData.append('target_language', targetLanguage.value);
 
         fetch('/api/upload', { method: 'POST', body: formData })
             .then(function(response) { return response.json(); })
