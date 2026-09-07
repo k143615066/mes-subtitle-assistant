@@ -74,6 +74,7 @@ error_handler = create_error_handler(logger)
 sessions = {}
 ENGLISH_REFLOW_LOCK = threading.Lock()
 GLOSSARY_LOCK = threading.Lock()
+API_KEY_LOCK = threading.Lock()
 
 
 def _default_glossary_path():
@@ -91,13 +92,102 @@ def _get_user_id():
     return user_id
 
 
+def _mask_api_key(api_key):
+    if not api_key:
+        return ""
+    if len(api_key) < 8:
+        return "已配置"
+    return f"{api_key[:3]}******{api_key[-4:]}"
+
+
+def _save_api_key(api_key):
+    lines = []
+    if os.path.exists(cfg.ENV_FILE):
+        with open(cfg.ENV_FILE, "r", encoding="utf-8-sig") as env_file:
+            lines = env_file.read().splitlines()
+
+    replacement = f"DeepSeek_Key={api_key}"
+    updated = False
+    for index, line in enumerate(lines):
+        if line.startswith("DeepSeek_Key="):
+            lines[index] = replacement
+            updated = True
+            break
+    if not updated:
+        if lines and lines[-1]:
+            lines.append("")
+        lines.append(replacement)
+
+    temp_path = f"{cfg.ENV_FILE}.tmp"
+    with open(temp_path, "w", encoding="utf-8", newline="\n") as env_file:
+        env_file.write("\n".join(lines).rstrip() + "\n")
+    if os.name != "nt":
+        os.chmod(temp_path, 0o600)
+    os.replace(temp_path, cfg.ENV_FILE)
+
+
+def _selected_language_details(session):
+    language_codes = session.get("target_languages")
+    if not language_codes:
+        language_codes = [
+            session.get("target_language", cfg.DEFAULT_TARGET_LANGUAGE)
+        ]
+    return [cfg.TARGET_LANGUAGES[code] for code in language_codes]
+
+
+def _selected_language_label(session):
+    return "、".join(item["label"] for item in _selected_language_details(session))
+
+
 @app.route("/")
 def index():
     return render_template(
         "index.html",
         target_languages=cfg.TARGET_LANGUAGES,
         default_target_language=cfg.DEFAULT_TARGET_LANGUAGE,
+        api_key_configured=bool(cfg.DEEPSEEK_API_KEY),
+        api_key_mask=_mask_api_key(cfg.DEEPSEEK_API_KEY),
     )
+
+
+@app.route("/api/settings/api-key")
+def api_key_status():
+    with API_KEY_LOCK:
+        return jsonify({
+            "success": True,
+            "configured": bool(cfg.DEEPSEEK_API_KEY),
+            "masked_key": _mask_api_key(cfg.DEEPSEEK_API_KEY),
+        })
+
+
+@app.route("/api/settings/api-key", methods=["POST"])
+def api_save_api_key():
+    data = request.get_json(silent=True) or {}
+    api_key = str(data.get("api_key", "")).strip()
+    if len(api_key) < 8 or "\n" in api_key or "\r" in api_key:
+        return jsonify({
+            "success": False,
+            "message": "API Key 格式无效，请重新输入",
+        }), 400
+
+    try:
+        with API_KEY_LOCK:
+            _save_api_key(api_key)
+            cfg.DEEPSEEK_API_KEY = api_key
+            os.environ["DeepSeek_Key"] = api_key
+            ai_client.api_key = api_key
+        logger.info("DeepSeek API Key 已通过本机网页更新")
+        return jsonify({
+            "success": True,
+            "configured": True,
+            "masked_key": _mask_api_key(api_key),
+        })
+    except Exception:
+        logger.exception("保存 DeepSeek API Key 失败")
+        return jsonify({
+            "success": False,
+            "message": "API Key 保存失败，请检查项目目录写入权限",
+        }), 500
 
 
 @app.route("/glossary")
@@ -150,12 +240,21 @@ def api_upload():
     if not file.filename.endswith(".srt"):
         return jsonify({"success": False, "message": "仅支持 .srt 格式文件"}), 400
 
-    target_language = request.form.get(
-        "target_language", cfg.DEFAULT_TARGET_LANGUAGE
-    )
-    language_config = cfg.TARGET_LANGUAGES.get(target_language)
-    if language_config is None:
-        return jsonify({"success": False, "message": "不支持的目标语言"}), 400
+    target_languages = request.form.getlist("target_languages")
+    if not target_languages:
+        target_languages = [request.form.get(
+            "target_language", cfg.DEFAULT_TARGET_LANGUAGE
+        )]
+    target_languages = list(dict.fromkeys(target_languages))
+    if not target_languages or any(
+        code not in cfg.TARGET_LANGUAGES for code in target_languages
+    ):
+        return jsonify({"success": False, "message": "目标语言选择无效"}), 400
+    if not cfg.DEEPSEEK_API_KEY:
+        return jsonify({
+            "success": False,
+            "message": "请先在首页配置 DeepSeek API Key",
+        }), 400
 
     session_id = uuid.uuid4().hex[:12]
     upload_dir = os.path.join(cfg.UPLOAD_FOLDER, session_id)
@@ -184,8 +283,11 @@ def api_upload():
     sessions[session_id] = {
         "id": session_id,
         "filename": file.filename,
-        "target_language": target_language,
-        "target_language_label": language_config["label"],
+        "target_languages": target_languages,
+        "target_language": target_languages[0],
+        "target_language_label": "、".join(
+            cfg.TARGET_LANGUAGES[code]["label"] for code in target_languages
+        ),
         "srt_path": srt_path,
         "entries": entries,
         "corrections": corrections,
@@ -238,7 +340,7 @@ def edit_page(session_id):
         filename=session["filename"],
         entries=entries_data,
         corrections=session["corrections"],
-        target_language_label=session.get("target_language_label", "英文"),
+        target_language_label=_selected_language_label(session),
     )
 
 
@@ -371,17 +473,15 @@ def _process_worker(session_id):
     try:
         cn_entries = session["entries"]
         original_base = os.path.splitext(session["filename"])[0]
-        target_language = session.get(
-            "target_language", cfg.DEFAULT_TARGET_LANGUAGE
-        )
-        language_config = cfg.TARGET_LANGUAGES[target_language]
-        target_language_label = language_config["label"]
-        target_language_name = language_config["prompt_name"]
-        language_instruction = language_config["instruction"]
+        target_languages = session.get("target_languages") or [
+            session.get("target_language", cfg.DEFAULT_TARGET_LANGUAGE)
+        ]
+        target_languages = list(dict.fromkeys(target_languages))
+        total_languages = len(target_languages)
 
         progress["logs"].append(
-            f"{datetime.now().strftime('%H:%M:%S')} 开始{target_language_label}翻译，"
-            f"共 {len(cn_entries)} 条中文字幕"
+            f"{datetime.now().strftime('%H:%M:%S')} 开始翻译 "
+            f"{total_languages} 种目标语言，共 {len(cn_entries)} 条中文字幕"
         )
         if cn_entries:
             progress["logs"].append(
@@ -397,10 +497,28 @@ def _process_worker(session_id):
         with open(cn_path, "w", encoding="utf-8") as f:
             f.write(build_srt(cn_entries))
 
-        progress["step"] = "translate"
-        progress["message"] = f"正在翻译为{target_language_label}..."
+        if not cfg.DEEPSEEK_API_KEY:
+            raise RuntimeError("未配置 DeepSeek API Key，无法进行翻译")
 
-        if cfg.DEEPSEEK_API_KEY:
+        glossary_text = load_glossary(_default_glossary_path())
+        output_files = [
+            {"name": f"中文_{original_base}.srt", "label": "中文字幕", "path": cn_path}
+        ]
+
+        for language_index, target_language in enumerate(target_languages):
+            language_config = cfg.TARGET_LANGUAGES[target_language]
+            target_language_label = language_config["label"]
+            target_language_name = language_config["prompt_name"]
+            language_instruction = language_config["instruction"]
+            language_progress_start = int(language_index / total_languages * 100)
+            language_progress_end = int((language_index + 1) / total_languages * 100)
+
+            progress["step"] = "translate"
+            progress["percent"] = language_progress_start
+            progress["message"] = (
+                f"正在处理第 {language_index + 1}/{total_languages} 种语言："
+                f"{target_language_label}翻译"
+            )
             session["api_calls"].append({
                 "step": "translate",
                 "action": f"AI{target_language_label}翻译",
@@ -408,134 +526,124 @@ def _process_worker(session_id):
                 "time": datetime.now().strftime('%H:%M:%S'),
             })
             progress["logs"].append(
-                f"{datetime.now().strftime('%H:%M:%S')} [API] 调用DeepSeek翻译..."
+                f"{datetime.now().strftime('%H:%M:%S')} [{language_index + 1}/"
+                f"{total_languages}] 调用 DeepSeek 翻译为{target_language_label}"
             )
-        else:
+
+            target_entries = translate_srt_entries(
+                entries=cn_entries,
+                ai_client=ai_client,
+                glossary_text=glossary_text,
+                batch_size=cfg.BATCH_SIZE,
+                temperature=cfg.TRANSLATION_TEMPERATURE,
+                target_language=target_language_name,
+                language_instruction=language_instruction,
+            )
+
+            for i, target_entry in enumerate(target_entries):
+                if i < len(cn_entries):
+                    target_entry.start_time = cn_entries[i].start_time
+                    target_entry.end_time = cn_entries[i].end_time
+                    target_entry.index = cn_entries[i].index
+
+            progress["percent"] = language_progress_start + int(
+                (language_progress_end - language_progress_start) * 0.7
+            )
             progress["logs"].append(
-                f"{datetime.now().strftime('%H:%M:%S')} [错误] 无API Key，无法翻译"
+                f"{datetime.now().strftime('%H:%M:%S')} {target_language_label}翻译完成"
+                f" -> {len(target_entries)} 条"
             )
-            raise Exception("未配置DeepSeek API Key，无法进行翻译")
 
-        glossary_text = load_glossary(_default_glossary_path())
+            optimized_target_entries = target_entries
+            if cfg.ENABLE_ENGLISH_REFLOW:
+                progress["step"] = "english_reflow"
+                session["api_calls"].append({
+                    "step": "english_reflow",
+                    "action": f"AI{target_language_label}字幕可读性优化",
+                    "model": cfg.DEEPSEEK_MODEL,
+                    "time": datetime.now().strftime('%H:%M:%S'),
+                })
 
-        en_entries = translate_srt_entries(
-            entries=cn_entries,
-            ai_client=ai_client,
-            glossary_text=glossary_text,
-            batch_size=cfg.BATCH_SIZE,
-            temperature=cfg.TRANSLATION_TEMPERATURE,
-            target_language=target_language_name,
-            language_instruction=language_instruction,
-        )
-
-        for i, en_entry in enumerate(en_entries):
-            if i < len(cn_entries):
-                en_entry.start_time = cn_entries[i].start_time
-                en_entry.end_time = cn_entries[i].end_time
-                en_entry.index = cn_entries[i].index
-
-        progress["percent"] = 75
-        progress["message"] = (
-            f"翻译完成，正在优化{target_language_label}字幕可读性..."
-        )
-        progress["logs"].append(
-            f"{datetime.now().strftime('%H:%M:%S')} [API] {target_language_label}翻译完成"
-            f" -> {len(en_entries)} 条"
-        )
-
-        optimized_en_entries = en_entries
-        if cfg.ENABLE_ENGLISH_REFLOW:
-            progress["step"] = "english_reflow"
-            session["api_calls"].append({
-                "step": "english_reflow",
-                "action": f"AI{target_language_label}字幕可读性优化",
-                "model": cfg.DEEPSEEK_MODEL,
-                "time": datetime.now().strftime('%H:%M:%S'),
-            })
-            progress["logs"].append(
-                f"{datetime.now().strftime('%H:%M:%S')} [API] 根据字幕约束重排"
-                f"{target_language_label}字幕碎片..."
-            )
-            try:
                 def update_reflow_progress(batch_number, total_batches, detail):
-                    progress["percent"] = 75 + int((batch_number - 1) / total_batches * 15)
+                    batch_ratio = (batch_number - 1) / max(total_batches, 1)
+                    progress["percent"] = language_progress_start + int(
+                        (language_progress_end - language_progress_start)
+                        * (0.7 + batch_ratio * 0.25)
+                    )
                     progress["message"] = (
-                        f"{target_language_label}可读性优化：第 {batch_number}/"
-                        f"{total_batches} 批，{detail}"
+                        f"正在处理第 {language_index + 1}/{total_languages} 种语言："
+                        f"{target_language_label}可读性优化，第 {batch_number}/"
+                        f"{total_batches} 批"
+                    )
+
+                progress["message"] = (
+                    f"正在处理第 {language_index + 1}/{total_languages} 种语言："
+                    f"{target_language_label}可读性优化"
+                )
+                try:
+                    with ENGLISH_REFLOW_LOCK:
+                        optimized_target_entries, mappings, reflow_report = (
+                            reflow_english_subtitles(
+                                cn_entries=cn_entries,
+                                en_entries=target_entries,
+                                ai_client=ai_client,
+                                glossary_text=glossary_text,
+                                batch_size=cfg.ENGLISH_REFLOW_BATCH_SIZE,
+                                max_chars_per_line=language_config["max_chars_per_line"],
+                                warning_wps=language_config["warning_reading_speed"],
+                                hard_wps=language_config["hard_reading_speed"],
+                                min_duration_ms=cfg.ENGLISH_MIN_DURATION_MS,
+                                timeout=cfg.ENGLISH_REFLOW_TIMEOUT,
+                                max_retries=cfg.ENGLISH_REFLOW_MAX_RETRIES,
+                                revise_batches=cfg.ENGLISH_REFLOW_REVISE_BATCHES,
+                                progress_callback=update_reflow_progress,
+                                language=target_language_name,
+                                language_code=target_language,
+                                language_instruction=language_instruction,
+                            )
+                        )
+                    progress["logs"].append(
+                        f"{datetime.now().strftime('%H:%M:%S')} "
+                        f"{target_language_label}可读性优化完成 -> "
+                        f"{len(optimized_target_entries)} 条，合并 "
+                        f"{reflow_report['merged_entries']} 条"
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"[{session_id}] {target_language_label}字幕可读性优化失败，"
+                        f"保留逐条翻译: {e}"
                     )
                     progress["logs"].append(
-                        f"{datetime.now().strftime('%H:%M:%S')} {target_language_label}"
-                        "可读性优化："
-                        f"第 {batch_number}/{total_batches} 批，{detail}"
+                        f"{datetime.now().strftime('%H:%M:%S')} [警告] "
+                        f"{target_language_label}重排失败，保留逐条翻译结果"
                     )
 
-                progress["message"] = f"{target_language_label}可读性优化排队中..."
-                with ENGLISH_REFLOW_LOCK:
-                    progress["logs"].append(
-                        f"{datetime.now().strftime('%H:%M:%S')} 获得"
-                        f"{target_language_label}可读性优化处理队列"
-                    )
-                    optimized_en_entries, mappings, reflow_report = reflow_english_subtitles(
-                        cn_entries=cn_entries,
-                        en_entries=en_entries,
-                        ai_client=ai_client,
-                        glossary_text=glossary_text,
-                        batch_size=cfg.ENGLISH_REFLOW_BATCH_SIZE,
-                        max_chars_per_line=language_config["max_chars_per_line"],
-                        warning_wps=language_config["warning_reading_speed"],
-                        hard_wps=language_config["hard_reading_speed"],
-                        min_duration_ms=cfg.ENGLISH_MIN_DURATION_MS,
-                        timeout=cfg.ENGLISH_REFLOW_TIMEOUT,
-                        max_retries=cfg.ENGLISH_REFLOW_MAX_RETRIES,
-                        revise_batches=cfg.ENGLISH_REFLOW_REVISE_BATCHES,
-                        progress_callback=update_reflow_progress,
-                        language=target_language_name,
-                        language_code=target_language,
-                        language_instruction=language_instruction,
-                    )
-                progress["logs"].append(
-                    f"{datetime.now().strftime('%H:%M:%S')} {target_language_label}"
-                    "可读性优化完成 -> "
-                    f"{len(optimized_en_entries)} 条，合并 {reflow_report['merged_entries']} 条"
-                )
-            except Exception as e:
-                logger.warning(
-                    f"[{session_id}] {target_language_label}字幕可读性优化失败，"
-                    f"保留逐条翻译: {e}"
-                )
-                progress["logs"].append(
-                    f"{datetime.now().strftime('%H:%M:%S')} [警告] {target_language_label}"
-                    "重排失败，保留原翻译结果"
-                )
+            target_prefix = language_config["file_prefix"]
+            aligned_name = f"{target_prefix}_{original_base}.srt"
+            aligned_target_path = os.path.join(output_dir, aligned_name)
+            with open(aligned_target_path, "w", encoding="utf-8") as f:
+                f.write(build_srt(target_entries))
 
-        target_prefix = language_config["file_prefix"]
-        aligned_target_path = os.path.join(
-            output_dir, f"{target_prefix}_{original_base}.srt"
-        )
-        with open(aligned_target_path, "w", encoding="utf-8") as f:
-            f.write(build_srt(en_entries))
+            readable_name = f"{target_prefix}_可读优化版_{original_base}.srt"
+            readable_target_path = os.path.join(output_dir, readable_name)
+            with open(readable_target_path, "w", encoding="utf-8") as f:
+                f.write(build_srt(optimized_target_entries))
 
-        readable_target_path = os.path.join(
-            output_dir, f"{target_prefix}_可读优化版_{original_base}.srt"
-        )
-        with open(readable_target_path, "w", encoding="utf-8") as f:
-            f.write(build_srt(optimized_en_entries))
-        with open(cn_path, "w", encoding="utf-8") as f:
-            f.write(build_srt(cn_entries))
+            output_files.extend([
+                {
+                    "name": aligned_name,
+                    "label": f"{target_language_label}字幕（逐条对齐版）",
+                    "path": aligned_target_path,
+                },
+                {
+                    "name": readable_name,
+                    "label": f"{target_language_label}字幕（可读优化版）",
+                    "path": readable_target_path,
+                },
+            ])
+            progress["percent"] = language_progress_end
 
-        session["output_files"] = [
-            {"name": f"中文_{original_base}.srt", "label": "中文字幕", "path": cn_path},
-            {
-                "name": f"{target_prefix}_{original_base}.srt",
-                "label": f"{target_language_label}字幕（逐条对齐版）",
-                "path": aligned_target_path,
-            },
-            {
-                "name": f"{target_prefix}_可读优化版_{original_base}.srt",
-                "label": f"{target_language_label}字幕（可读优化版）",
-                "path": readable_target_path,
-            },
-        ]
+        session["output_files"] = output_files
         progress["step"] = "done"
         progress["percent"] = 100
         progress["message"] = "处理完成！"
@@ -546,7 +654,7 @@ def _process_worker(session_id):
         session["status"] = "completed"
         logger.info(
             f"[{session_id}] 处理完成: cn={len(cn_entries)}, "
-            f"target={target_language}, entries={len(en_entries)}"
+            f"targets={','.join(target_languages)}, files={len(output_files)}"
         )
 
     except Exception as e:
@@ -566,9 +674,7 @@ def processing_page(session_id):
         "processing.html",
         session_id=session_id,
         filename=sessions[session_id]["filename"],
-        target_language_label=sessions[session_id].get(
-            "target_language_label", "英文"
-        ),
+        target_language_label=_selected_language_label(sessions[session_id]),
     )
 
 
@@ -609,10 +715,10 @@ def download_page(session_id):
         session_id=session_id,
         filename=session["filename"],
         subtitle_files=subtitle_files,
-        target_language_label=session.get("target_language_label", "英文"),
-        target_language_rtl=cfg.TARGET_LANGUAGES.get(
-            session.get("target_language", cfg.DEFAULT_TARGET_LANGUAGE), {}
-        ).get("rtl", False),
+        target_language_label=_selected_language_label(session),
+        target_language_rtl=any(
+            item.get("rtl", False) for item in _selected_language_details(session)
+        ),
     )
 
 
@@ -655,6 +761,8 @@ def page_not_found(e):
         "index.html",
         target_languages=cfg.TARGET_LANGUAGES,
         default_target_language=cfg.DEFAULT_TARGET_LANGUAGE,
+        api_key_configured=bool(cfg.DEEPSEEK_API_KEY),
+        api_key_mask=_mask_api_key(cfg.DEEPSEEK_API_KEY),
     ), 404
 
 

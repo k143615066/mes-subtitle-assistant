@@ -31,26 +31,6 @@ if not defined PYTHON_CMD (
     exit /b 1
 )
 
-set "HAS_API_KEY="
-set "DEEPSEEK_KEY="
-if exist "..\.env" (
-    for /f "usebackq tokens=1,* delims==" %%A in ("..\.env") do (
-        if /I "%%A"=="DeepSeek_Key" if not "%%B"=="" set "HAS_API_KEY=1"
-    )
-)
-
-if not defined HAS_API_KEY (
-    echo.
-    echo First start: a DeepSeek API Key is required.
-    powershell -NoProfile -Command "$key = Read-Host 'Paste your DeepSeek API Key, then press Enter' -AsSecureString; $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($key); try { $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr); if ([string]::IsNullOrWhiteSpace($plain)) { exit 1 }; @('# Local configuration. Do not upload this file to GitHub.', ('DeepSeek_Key=' + $plain), '', 'MES_ENABLE_ENGLISH_REFLOW=1') | Set-Content -LiteralPath '..\.env' -Encoding utf8 } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }"
-    if errorlevel 1 (
-        echo No API Key was entered. The application cannot start.
-        pause
-        exit /b 1
-    )
-    echo The local API Key configuration has been saved.
-)
-
 if not exist ".venv\Scripts\python.exe" (
     echo Creating the local runtime environment. Please wait...
     call %PYTHON_CMD% -m venv .venv
@@ -68,9 +48,11 @@ if errorlevel 1 (
     exit /b 1
 )
 
-for /f "usebackq tokens=1,* delims==" %%A in ("..\.env") do (
-    if /I "%%A"=="DeepSeek_Key" set "DeepSeek_Key=%%B"
-    if /I "%%A"=="MES_ENABLE_ENGLISH_REFLOW" set "MES_ENABLE_ENGLISH_REFLOW=%%B"
+if exist "..\.env" (
+    for /f "usebackq tokens=1,* delims==" %%A in ("..\.env") do (
+        if /I "%%A"=="DeepSeek_Key" set "DeepSeek_Key=%%B"
+        if /I "%%A"=="MES_ENABLE_ENGLISH_REFLOW" set "MES_ENABLE_ENGLISH_REFLOW=%%B"
+    )
 )
 
 echo.

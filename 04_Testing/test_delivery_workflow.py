@@ -180,6 +180,49 @@ class DeliveryWorkflowTest(unittest.TestCase):
         )
         self.assertTrue(all(os.path.exists(item["path"]) for item in session["output_files"]))
 
+    def test_multiple_languages_share_chinese_and_generate_two_files_each(self):
+        session_id = "multilanguagetest"
+        entries = [
+            SRTEntry(1, "00:00:00,000", "00:00:02,000", "这是 MES 看板。"),
+        ]
+        main.sessions[session_id] = {
+            "id": session_id,
+            "filename": "demo.srt",
+            "target_languages": ["en", "es-MX"],
+            "entries": entries,
+            "status": "edited",
+            "progress": {"step": "", "percent": 0, "message": "", "logs": []},
+            "output_files": [],
+            "api_calls": [],
+        }
+        translated_entries = [
+            SRTEntry(1, "00:00:00,000", "00:00:02,000", "Translated subtitle."),
+        ]
+
+        with patch.object(
+            main, "translate_srt_entries", return_value=translated_entries
+        ) as translate_mock, patch.object(
+            main,
+            "reflow_english_subtitles",
+            return_value=(translated_entries, [[0]], {"merged_entries": 0}),
+        ):
+            main._process_worker(session_id)
+
+        session = main.sessions[session_id]
+        self.assertEqual(session["status"], "completed")
+        self.assertEqual(translate_mock.call_count, 2)
+        self.assertEqual(
+            [item["name"] for item in session["output_files"]],
+            [
+                "中文_demo.srt",
+                "英文_demo.srt",
+                "英文_可读优化版_demo.srt",
+                "西班牙语（墨西哥）_demo.srt",
+                "西班牙语（墨西哥）_可读优化版_demo.srt",
+            ],
+        )
+        self.assertTrue(all(os.path.exists(item["path"]) for item in session["output_files"]))
+
 
 if __name__ == "__main__":
     unittest.main()

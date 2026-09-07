@@ -4,7 +4,8 @@
 
 {% block content %}
 <div class="card">
-    <div class="card-title" style="color:var(--success);">处理完成：{{ target_language_label }}</div>
+    <div class="card-title" style="color:var(--success);">处理完成</div>
+    <div class="download-language-summary">已生成：{{ target_language_label }}</div>
     {% if target_language_rtl %}
     <div class="language-note language-note-rtl">阿拉伯语字幕导入视频软件时，请选择支持从右到左排版的字体和字幕方向。</div>
     {% endif %}
@@ -28,7 +29,7 @@
     <div class="steps-guide">
         <h3>使用字幕</h3>
         <ol>
-            <li>下载中文字幕和需要使用的{{ target_language_label }}字幕。</li>
+            <li>下载中文字幕和需要使用的目标语言字幕。</li>
             <li>将字幕导入视频编辑软件。</li>
             <li>在视频编辑软件中设置字幕样式和位置。</li>
         </ol>

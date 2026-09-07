@@ -19,7 +19,7 @@
         <div class="progress-item">
             <div class="step-icon waiting" id="iconTranslate">2</div>
             <div class="step-info">
-                <div class="step-name">翻译目标语言字幕</div>
+                <div class="step-name">生成所选语言字幕</div>
                 <div class="step-bar"><div class="step-bar-fill" id="barTranslate" style="width:0%"></div></div>
             </div>
             <div class="step-status" id="statusTranslate">等待</div>
@@ -27,7 +27,7 @@
         <div class="progress-item">
             <div class="step-icon waiting" id="iconReflow">3</div>
             <div class="step-info">
-                <div class="step-name">优化目标语言字幕可读性</div>
+                <div class="step-name">优化当前语言可读性</div>
                 <div class="step-bar"><div class="step-bar-fill" id="barReflow" style="width:0%"></div></div>
             </div>
             <div class="step-status" id="statusReflow">等待</div>
@@ -58,7 +58,7 @@ document.addEventListener('DOMContentLoaded', function() {
             updateStep('Reflow', 'waiting', 0);
         } else if (step === 'translate') {
             updateStep('Optimize', 'done', 100);
-            updateStep('Translate', 'active', Math.min(percent, 75));
+            updateStep('Translate', 'active', percent);
             updateStep('Reflow', 'waiting', 0);
         } else if (step === 'done') {
             updateStep('Optimize', 'done', 100);
@@ -70,8 +70,8 @@ document.addEventListener('DOMContentLoaded', function() {
             updateStep('Reflow', 'waiting', 0);
         } else if (step === 'english_reflow') {
             updateStep('Optimize', 'done', 100);
-            updateStep('Translate', 'done', 100);
-            updateStep('Reflow', 'active', Math.max(0, Math.min(100, (percent - 75) * 4)));
+            updateStep('Translate', 'active', percent);
+            updateStep('Reflow', 'active', percent);
         } else {
             updateStep('Optimize', 'done', 100);
             updateStep('Translate', 'done', 100);

@@ -3,6 +3,23 @@
 {% block title %}MES字幕助手{% endblock %}
 
 {% block content %}
+<div class="card api-key-card">
+    <div class="card-title">DeepSeek API Key</div>
+    <div class="api-key-status-row">
+        <div>
+            <div class="api-key-status" id="apiKeyStatus">
+                {% if api_key_configured %}已配置：{{ api_key_mask }}{% else %}尚未配置{% endif %}
+            </div>
+            <div class="form-help">密钥仅保存在本机项目的 .env 文件中，页面只显示前 3 位和后 4 位。</div>
+        </div>
+    </div>
+    <div class="api-key-form">
+        <input type="password" id="apiKeyInput" class="form-control" autocomplete="new-password" placeholder="输入新的 DeepSeek API Key">
+        <button type="button" class="btn btn-secondary" id="saveApiKeyBtn">保存密钥</button>
+    </div>
+    <div id="apiKeyAlert" class="alert hidden"></div>
+</div>
+
 <div class="card">
     <div class="card-title">上传中文字幕文件</div>
     <div class="upload-zone-large" id="srtUploadZone">
@@ -15,15 +32,18 @@
 
     <div id="srtAlert" class="alert hidden"></div>
 
-    <div style="margin-top:18px;">
-        <label for="targetLanguage" style="display:block; margin-bottom:8px; font-size:13px; color:var(--text-secondary);">目标语言</label>
-        <select id="targetLanguage" class="form-control" style="max-width:420px;">
+    <fieldset class="language-fieldset">
+        <legend>目标语言（可多选）</legend>
+        <div class="language-options">
             {% for code, language in target_languages.items() %}
-            <option value="{{ code }}"{% if code == default_target_language %} selected{% endif %}>{{ language.label }}</option>
+            <label class="language-option">
+                <input type="checkbox" name="target_languages" value="{{ code }}"{% if code == default_target_language %} checked{% endif %}>
+                <span>{{ language.label }}</span>
+            </label>
             {% endfor %}
-        </select>
-        <div style="margin-top:7px; font-size:12px; color:var(--text-light);">MES术语库以中文-英文标准术语为依据，其他语言由 AI 参考英文术语生成。</div>
-    </div>
+        </div>
+        <div class="form-help">每种语言生成逐条对齐版和可读优化版。MES 术语库以中文-英文标准术语为依据。</div>
+    </fieldset>
 
     <div class="button-group">
         <button class="btn btn-primary" id="srtStartBtn" disabled>开始处理</button>
@@ -39,7 +59,17 @@ document.addEventListener('DOMContentLoaded', function() {
     var fileNameEl = document.getElementById('srtFileName');
     var startBtn = document.getElementById('srtStartBtn');
     var alertEl = document.getElementById('srtAlert');
-    var targetLanguage = document.getElementById('targetLanguage');
+    var apiKeyConfigured = {{ 'true' if api_key_configured else 'false' }};
+    var apiKeyInput = document.getElementById('apiKeyInput');
+    var saveApiKeyBtn = document.getElementById('saveApiKeyBtn');
+    var apiKeyStatus = document.getElementById('apiKeyStatus');
+    var apiKeyAlert = document.getElementById('apiKeyAlert');
+    var languageInputs = Array.from(document.querySelectorAll('input[name="target_languages"]'));
+
+    function updateStartState() {
+        var hasLanguage = languageInputs.some(function(item) { return item.checked; });
+        startBtn.disabled = !input.files.length || !hasLanguage || !apiKeyConfigured;
+    }
 
     zone.addEventListener('click', function() { input.click(); });
     zone.addEventListener('dragover', function(event) {
@@ -69,8 +99,46 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         fileNameEl.textContent = '已选择：' + file.name;
         fileNameEl.classList.remove('hidden');
-        startBtn.disabled = false;
+        updateStartState();
     }
+
+    languageInputs.forEach(function(item) {
+        item.addEventListener('change', updateStartState);
+    });
+
+    saveApiKeyBtn.addEventListener('click', function() {
+        var value = apiKeyInput.value.trim();
+        if (!value) {
+            apiKeyAlert.className = 'alert alert-error';
+            apiKeyAlert.textContent = '请输入 DeepSeek API Key';
+            return;
+        }
+        saveApiKeyBtn.disabled = true;
+        saveApiKeyBtn.textContent = '保存中...';
+        fetch('/api/settings/api-key', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ api_key: value })
+        })
+            .then(function(response) { return response.json(); })
+            .then(function(data) {
+                if (!data.success) throw new Error(data.message || '保存失败');
+                apiKeyConfigured = true;
+                apiKeyStatus.textContent = '已配置：' + data.masked_key;
+                apiKeyInput.value = '';
+                apiKeyAlert.className = 'alert alert-success';
+                apiKeyAlert.textContent = 'API Key 已保存并立即生效';
+                updateStartState();
+            })
+            .catch(function(error) {
+                apiKeyAlert.className = 'alert alert-error';
+                apiKeyAlert.textContent = error.message;
+            })
+            .finally(function() {
+                saveApiKeyBtn.disabled = false;
+                saveApiKeyBtn.textContent = '保存密钥';
+            });
+    });
 
     function showAlert(type, message) {
         alertEl.className = 'alert alert-' + type;
@@ -88,7 +156,9 @@ document.addEventListener('DOMContentLoaded', function() {
         formData.append('file', input.files[0]);
         formData.append('mode', 'full');
         formData.append('english_reflow', '1');
-        formData.append('target_language', targetLanguage.value);
+        languageInputs.filter(function(item) { return item.checked; }).forEach(function(item) {
+            formData.append('target_languages', item.value);
+        });
 
         fetch('/api/upload', { method: 'POST', body: formData })
             .then(function(response) { return response.json(); })
@@ -98,15 +168,17 @@ document.addEventListener('DOMContentLoaded', function() {
                     return;
                 }
                 showAlert('error', data.message || '上传失败');
-                startBtn.disabled = false;
                 startBtn.textContent = '开始处理';
+                updateStartState();
             })
             .catch(function(error) {
                 showAlert('error', '上传失败：' + error.message);
-                startBtn.disabled = false;
                 startBtn.textContent = '开始处理';
+                updateStartState();
             });
     });
+
+    updateStartState();
 });
 </script>
 {% endblock %}
